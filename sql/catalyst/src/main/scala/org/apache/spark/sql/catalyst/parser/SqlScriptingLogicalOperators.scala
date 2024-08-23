@@ -89,3 +89,7 @@ case class WhileStatement(
     condition: SingleStatement,
     body: CompoundBody,
     label: Option[String]) extends CompoundPlanStatement
+
+case class LoopStatement(
+    body: CompoundBody,
+    label: Option[String]) extends CompoundPlanStatement

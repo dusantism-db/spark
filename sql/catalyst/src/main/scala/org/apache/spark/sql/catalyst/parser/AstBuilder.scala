@@ -261,6 +261,12 @@ class AstBuilder extends DataTypeAstBuilder
     WhileStatement(condition, body, Some(labelText))
   }
 
+  override def visitLoopStatement(ctx: LoopStatementContext): AnyRef = {
+    val labelText = generateLabelText(Option(ctx.beginLabel()), Option(ctx.endLabel()))
+
+
+  }
+
   override def visitSingleStatement(ctx: SingleStatementContext): LogicalPlan = withOrigin(ctx) {
     Option(ctx.statement().asInstanceOf[ParserRuleContext])
       .orElse(Option(ctx.setResetStatement().asInstanceOf[ParserRuleContext]))

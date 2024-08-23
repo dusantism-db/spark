@@ -326,3 +326,30 @@ class WhileStatementExec(
     body.reset()
   }
 }
+
+class LoopStatementExec(
+  body: CompoundBodyExec,
+  session: SparkSession) extends NonLeafStatementExec {
+
+  private var curr: Option[CompoundStatementExec] = Some(body)
+
+  private lazy val treeIterator: Iterator[CompoundStatementExec] =
+    new Iterator[CompoundStatementExec] {
+      override def hasNext: Boolean = true
+
+      override def next(): CompoundStatementExec = {
+        val retStmt = body.getTreeIterator.next()
+        if (!body.getTreeIterator.hasNext) {
+          body.reset()
+        }
+        retStmt
+      }
+    }
+
+  override def getTreeIterator: Iterator[CompoundStatementExec] = treeIterator
+
+  override def reset(): Unit = {
+    curr = Some(body)
+    body.reset()
+  }
+}

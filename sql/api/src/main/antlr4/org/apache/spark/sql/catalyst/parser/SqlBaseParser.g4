@@ -65,6 +65,7 @@ compoundStatement
     | beginEndCompoundBlock
     | ifElseStatement
     | whileStatement
+    | loopStatement
     ;
 
 setStatementWithOptionalVarKeyword
@@ -81,6 +82,10 @@ ifElseStatement
     : IF booleanExpression THEN conditionalBodies+=compoundBody
         (ELSE IF booleanExpression THEN conditionalBodies+=compoundBody)*
         (ELSE elseBody=compoundBody)? END IF
+    ;
+
+loopStatement
+    : beginLabel? LOOP compoundBody END LOOP endLabel?
     ;
 
 singleStatement
@@ -1594,6 +1599,7 @@ ansiNonReserved
     | LOCKS
     | LOGICAL
     | LONG
+    | LOOP
     | MACRO
     | MAP
     | MATCHED
@@ -1945,6 +1951,7 @@ nonReserved
     | LOCKS
     | LOGICAL
     | LONG
+    | LOOP
     | MACRO
     | MAP
     | MATCHED
