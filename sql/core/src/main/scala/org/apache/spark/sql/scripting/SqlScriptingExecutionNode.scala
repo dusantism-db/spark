@@ -22,7 +22,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.sql.{Dataset, SparkSession}
 import org.apache.spark.sql.catalyst.analysis.{UnresolvedAttribute, UnresolvedIdentifier}
 import org.apache.spark.sql.catalyst.expressions.{Alias, CreateNamedStruct, Expression, Literal}
-import org.apache.spark.sql.catalyst.plans.logical.{CreateVariable, DefaultValueExpression, LogicalPlan, OneRowRelation, Project, SetVariable}
+import org.apache.spark.sql.catalyst.plans.logical.{CreateVariable, DefaultValueExpression, DropVariable, LogicalPlan, OneRowRelation, Project, SetVariable}
 import org.apache.spark.sql.catalyst.trees.{Origin, WithOrigin}
 import org.apache.spark.sql.errors.SqlScriptingErrors
 import org.apache.spark.sql.types.BooleanType
@@ -665,7 +665,7 @@ class ForStatementExec(
   body: CompoundBodyExec,
   label: Option[String],
   session: SparkSession) extends NonLeafStatementExec {
-  // fali reset, drop variable, izvlaciti metode
+  // fali reset, drop variable, extract methods, case when identifier is None
 
   private lazy val queryDataframe = {
     query.isExecuted = true
@@ -688,10 +688,24 @@ class ForStatementExec(
 
   private lazy val treeIterator: Iterator[CompoundStatementExec] =
     new Iterator[CompoundStatementExec] {
-      override def hasNext: Boolean = !interrupted && currRow < queryResult.length
+      override def hasNext: Boolean =
+        !interrupted &&
+        queryResult.length > 0 &&
+        // not currRow < queryResult.length because when
+        // currRow == queryResult.length we drop the local variable
+        currRow <= queryResult.length
 
       override def next(): CompoundStatementExec = state match {
         case ForState.VariableAssignment =>
+          // after all rows in the result set have been iterated, the local variable is dropped
+          if (currRow == queryResult.length) {
+            // set currRow to queryResult.length + 1 to end execution after current .next call
+            currRow += 1
+            val dropVariable =
+              DropVariable(UnresolvedIdentifier(Seq(identifier.get)), ifExists = true)
+            return new SingleStatementExec(dropVariable, Origin(), false)
+          }
+
           val namedStructArgs: Seq[Expression] =
             queryDataframe.schema.names.toSeq.flatMap { colName =>
               Seq(Literal(colName), Literal(queryResult(currRow).getAs(colName)))
@@ -722,6 +736,7 @@ class ForStatementExec(
           body.reset()
 
           setExec
+
         case ForState.Body =>
           val retStmt = body.getTreeIterator.next()
 
@@ -755,6 +770,7 @@ class ForStatementExec(
 
   override def reset(): Unit = {
     state = ForState.VariableAssignment
+    currRow = 0
     body.reset()
   }
 }
