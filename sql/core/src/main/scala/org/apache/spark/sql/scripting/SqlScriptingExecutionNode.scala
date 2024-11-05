@@ -762,7 +762,7 @@ class ForStatementExec(
       defaultExpression,
       replace = true
     )
-    new SingleStatementExec(declareVariable, Origin(), false)
+    new SingleStatementExec(declareVariable, Origin(), isInternal = true)
   }
 
   private def createSetVarExec(variable: Expression): SingleStatementExec = {
@@ -772,7 +772,7 @@ class ForStatementExec(
     )
     val setIdentifierToCurrentRow =
       SetVariable(Seq(UnresolvedAttribute(identifier.get)), projectNamedStruct)
-    new SingleStatementExec(setIdentifierToCurrentRow, Origin(), false)
+    new SingleStatementExec(setIdentifierToCurrentRow, Origin(), isInternal = true)
   }
 
   override def getTreeIterator: Iterator[CompoundStatementExec] = treeIterator
