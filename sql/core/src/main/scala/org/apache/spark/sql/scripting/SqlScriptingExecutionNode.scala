@@ -706,7 +706,6 @@ class ForStatementExec(
             return next()
           }
           currVariable = createExpressionFromValue(cachedQueryResult()(currRow))
-
           state = ForState.VariableAssignment
           createDeclareVarExec(variableName.get, currVariable)
 
@@ -744,6 +743,9 @@ class ForStatementExec(
       }
     }
 
+  /**
+   * Creates a Catalyst expression from Scala value.
+   */
   private def createExpressionFromValue(value: Any): Expression = value match {
     case m: Map[_, _] =>
       // arguments of CreateMap are in the format: (key1, val1, key2, val2, ...)

@@ -27,36 +27,6 @@ import org.apache.spark.sql.exceptions.SqlScriptingException
 class SqlScriptingParserSuite extends SparkFunSuite with SQLHelper {
   import CatalystSqlParser._
 
-  test("testtest") {
-    val sqlScriptText = "DECLARE my_map DEFAULT MAP('x', 0, 'y', 0);"
-
-    val tree = parseScript(sqlScriptText)
-    assert(tree.collection.length == 1)
-    assert(tree.collection.head.isInstanceOf[ForStatement])
-  }
-
-  test("testtesttest") {
-    val sqlScriptText = "DECLARE my_struct DEFAULT STRUCT<'x', 0, 1.2>;"
-
-    val tree = parseScript(sqlScriptText)
-    assert(tree.collection.length == 1)
-    assert(tree.collection.head.isInstanceOf[ForStatement])
-  }
-
-  test("initial for") {
-    val sqlScriptText =
-      """
-        |BEGIN
-        |  FOR x AS SELECT 1 DO
-        |    SELECT 1;
-        |    SELECT 2;
-        |  END FOR;
-        |END""".stripMargin
-    val tree = parseScript(sqlScriptText)
-    assert(tree.collection.length == 1)
-    assert(tree.collection.head.isInstanceOf[ForStatement])
-  }
-
   test("single select") {
     val sqlScriptText = "SELECT 1;"
     val tree = parseScript(sqlScriptText)
@@ -1146,7 +1116,6 @@ class SqlScriptingParserSuite extends SparkFunSuite with SQLHelper {
       head.asInstanceOf[SingleStatement].getText == "SELECT 42")
 
     assert(whileStmt.label.contains("lbl"))
-
   }
 
   test("searched case statement") {
@@ -1633,6 +1602,238 @@ class SqlScriptingParserSuite extends SparkFunSuite with SQLHelper {
 
     assert(nestedLoopStmt.body.collection(1).isInstanceOf[IterateStatement])
     assert(nestedLoopStmt.body.collection(1).asInstanceOf[IterateStatement].label == "lbl")
+  }
+
+  test("for statement") {
+    val sqlScriptText =
+      """
+        |BEGIN
+        |  lbl: FOR x AS SELECT 5 DO
+        |    SELECT 1;
+        |  END FOR;
+        |END""".stripMargin
+    val tree = parseScript(sqlScriptText)
+    assert(tree.collection.length == 1)
+    assert(tree.collection.head.isInstanceOf[ForStatement])
+
+    val forStmt = tree.collection.head.asInstanceOf[ForStatement]
+    assert(forStmt.query.isInstanceOf[SingleStatement])
+    assert(forStmt.query.getText == "SELECT 5")
+    assert(forStmt.variableName.contains("x"))
+
+    assert(forStmt.body.isInstanceOf[CompoundBody])
+    assert(forStmt.body.collection.length == 1)
+    assert(forStmt.body.collection.head.isInstanceOf[SingleStatement])
+    assert(forStmt.body.collection.head.asInstanceOf[SingleStatement].getText == "SELECT 1")
+
+    assert(forStmt.label.contains("lbl"))
+  }
+
+  test("for statement no label") {
+    val sqlScriptText =
+      """
+        |BEGIN
+        |  FOR x AS SELECT 5 DO
+        |    SELECT 1;
+        |  END FOR;
+        |END""".stripMargin
+    val tree = parseScript(sqlScriptText)
+    assert(tree.collection.length == 1)
+    assert(tree.collection.head.isInstanceOf[ForStatement])
+
+    val forStmt = tree.collection.head.asInstanceOf[ForStatement]
+    assert(forStmt.query.isInstanceOf[SingleStatement])
+    assert(forStmt.query.getText == "SELECT 5")
+    assert(forStmt.variableName.contains("x"))
+
+    assert(forStmt.body.isInstanceOf[CompoundBody])
+    assert(forStmt.body.collection.length == 1)
+    assert(forStmt.body.collection.head.isInstanceOf[SingleStatement])
+    assert(forStmt.body.collection.head.asInstanceOf[SingleStatement].getText == "SELECT 1")
+
+    // when not explicitly set, label is random UUID
+    assert(forStmt.label.isDefined)
+  }
+
+  test("for statement with complex subquery") {
+    val sqlScriptText =
+      """
+        |BEGIN
+        |  lbl: FOR x AS SELECT c1, c2 FROM t WHERE c2 = 5 GROUP BY c1 ORDER BY c1 DO
+        |    SELECT x.c1;
+        |    SELECT x.c2;
+        |  END FOR;
+        |END""".stripMargin
+    val tree = parseScript(sqlScriptText)
+    assert(tree.collection.length == 1)
+    assert(tree.collection.head.isInstanceOf[ForStatement])
+
+    val forStmt = tree.collection.head.asInstanceOf[ForStatement]
+    assert(forStmt.query.isInstanceOf[SingleStatement])
+    assert(forStmt.query.getText == "SELECT c1, c2 FROM t WHERE c2 = 5 GROUP BY c1 ORDER BY c1")
+    assert(forStmt.variableName.contains("x"))
+
+    assert(forStmt.body.isInstanceOf[CompoundBody])
+    assert(forStmt.body.collection.length == 2)
+    assert(forStmt.body.collection.head.isInstanceOf[SingleStatement])
+    assert(forStmt.body.collection.head.asInstanceOf[SingleStatement].getText == "SELECT x.c1")
+    assert(forStmt.body.collection(1).isInstanceOf[SingleStatement])
+    assert(forStmt.body.collection(1).asInstanceOf[SingleStatement].getText == "SELECT x.c2")
+
+    assert(forStmt.label.contains("lbl"))
+  }
+
+  test("nested for statement") {
+    val sqlScriptText =
+      """
+        |BEGIN
+        |  lbl1: FOR i AS SELECT 1 DO
+        |    lbl2: FOR j AS SELECT 2 DO
+        |      SELECT i + j;
+        |    END FOR lbl2;
+        |  END FOR lbl1;
+        |END""".stripMargin
+    val tree = parseScript(sqlScriptText)
+    assert(tree.collection.length == 1)
+    assert(tree.collection.head.isInstanceOf[ForStatement])
+
+    val forStmt = tree.collection.head.asInstanceOf[ForStatement]
+    assert(forStmt.query.isInstanceOf[SingleStatement])
+    assert(forStmt.query.getText == "SELECT 1")
+    assert(forStmt.variableName.contains("i"))
+    assert(forStmt.label.contains("lbl1"))
+
+    assert(forStmt.body.isInstanceOf[CompoundBody])
+    assert(forStmt.body.collection.length == 1)
+    assert(forStmt.body.collection.head.isInstanceOf[ForStatement])
+    val nestedForStmt = forStmt.body.collection.head.asInstanceOf[ForStatement]
+
+    assert(nestedForStmt.query.isInstanceOf[SingleStatement])
+    assert(nestedForStmt.query.getText == "SELECT 2")
+    assert(nestedForStmt.variableName.contains("j"))
+    assert(nestedForStmt.label.contains("lbl2"))
+
+    assert(nestedForStmt.body.isInstanceOf[CompoundBody])
+    assert(nestedForStmt.body.collection.length == 1)
+    assert(nestedForStmt.body.collection.head.isInstanceOf[SingleStatement])
+    assert(nestedForStmt.body.collection.
+      head.asInstanceOf[SingleStatement].getText == "SELECT i + j")
+  }
+
+  test("for statement no variable") {
+    val sqlScriptText =
+      """
+        |BEGIN
+        |  lbl: FOR SELECT 5 DO
+        |    SELECT 1;
+        |  END FOR;
+        |END""".stripMargin
+    val tree = parseScript(sqlScriptText)
+    assert(tree.collection.length == 1)
+    assert(tree.collection.head.isInstanceOf[ForStatement])
+
+    val forStmt = tree.collection.head.asInstanceOf[ForStatement]
+    assert(forStmt.query.isInstanceOf[SingleStatement])
+    assert(forStmt.query.getText == "SELECT 5")
+    assert(forStmt.variableName.isEmpty)
+
+    assert(forStmt.body.isInstanceOf[CompoundBody])
+    assert(forStmt.body.collection.length == 1)
+    assert(forStmt.body.collection.head.isInstanceOf[SingleStatement])
+    assert(forStmt.body.collection.head.asInstanceOf[SingleStatement].getText == "SELECT 1")
+
+    assert(forStmt.label.contains("lbl"))
+  }
+
+  test("for statement no label no variable") {
+    val sqlScriptText =
+      """
+        |BEGIN
+        |  FOR SELECT 5 DO
+        |    SELECT 1;
+        |  END FOR;
+        |END""".stripMargin
+    val tree = parseScript(sqlScriptText)
+    assert(tree.collection.length == 1)
+    assert(tree.collection.head.isInstanceOf[ForStatement])
+
+    val forStmt = tree.collection.head.asInstanceOf[ForStatement]
+    assert(forStmt.query.isInstanceOf[SingleStatement])
+    assert(forStmt.query.getText == "SELECT 5")
+    assert(forStmt.variableName.isEmpty)
+
+    assert(forStmt.body.isInstanceOf[CompoundBody])
+    assert(forStmt.body.collection.length == 1)
+    assert(forStmt.body.collection.head.isInstanceOf[SingleStatement])
+    assert(forStmt.body.collection.head.asInstanceOf[SingleStatement].getText == "SELECT 1")
+
+    // when not explicitly set, label is random UUID
+    assert(forStmt.label.isDefined)
+  }
+
+  test("for statement with complex subquery no variable") {
+    val sqlScriptText =
+      """
+        |BEGIN
+        |  lbl: FOR SELECT c1, c2 FROM t WHERE c2 = 5 GROUP BY c1 ORDER BY c1 DO
+        |    SELECT 1;
+        |    SELECT 2;
+        |  END FOR;
+        |END""".stripMargin
+    val tree = parseScript(sqlScriptText)
+    assert(tree.collection.length == 1)
+    assert(tree.collection.head.isInstanceOf[ForStatement])
+
+    val forStmt = tree.collection.head.asInstanceOf[ForStatement]
+    assert(forStmt.query.isInstanceOf[SingleStatement])
+    assert(forStmt.query.getText == "SELECT c1, c2 FROM t WHERE c2 = 5 GROUP BY c1 ORDER BY c1")
+    assert(forStmt.variableName.isEmpty)
+
+    assert(forStmt.body.isInstanceOf[CompoundBody])
+    assert(forStmt.body.collection.length == 2)
+    assert(forStmt.body.collection.head.isInstanceOf[SingleStatement])
+    assert(forStmt.body.collection.head.asInstanceOf[SingleStatement].getText == "SELECT 1")
+    assert(forStmt.body.collection(1).isInstanceOf[SingleStatement])
+    assert(forStmt.body.collection(1).asInstanceOf[SingleStatement].getText == "SELECT 2")
+
+    assert(forStmt.label.contains("lbl"))
+  }
+
+  test("nested for statement no variable") {
+    val sqlScriptText =
+      """
+        |BEGIN
+        |  lbl1: FOR SELECT 1 DO
+        |    lbl2: FOR SELECT 2 DO
+        |      SELECT 3;
+        |    END FOR lbl2;
+        |  END FOR lbl1;
+        |END""".stripMargin
+    val tree = parseScript(sqlScriptText)
+    assert(tree.collection.length == 1)
+    assert(tree.collection.head.isInstanceOf[ForStatement])
+
+    val forStmt = tree.collection.head.asInstanceOf[ForStatement]
+    assert(forStmt.query.isInstanceOf[SingleStatement])
+    assert(forStmt.query.getText == "SELECT 1")
+    assert(forStmt.variableName.isEmpty)
+    assert(forStmt.label.contains("lbl1"))
+
+    assert(forStmt.body.isInstanceOf[CompoundBody])
+    assert(forStmt.body.collection.length == 1)
+    assert(forStmt.body.collection.head.isInstanceOf[ForStatement])
+    val nestedForStmt = forStmt.body.collection.head.asInstanceOf[ForStatement]
+
+    assert(nestedForStmt.query.isInstanceOf[SingleStatement])
+    assert(nestedForStmt.query.getText == "SELECT 2")
+    assert(nestedForStmt.variableName.isEmpty)
+    assert(nestedForStmt.label.contains("lbl2"))
+
+    assert(nestedForStmt.body.isInstanceOf[CompoundBody])
+    assert(nestedForStmt.body.collection.length == 1)
+    assert(nestedForStmt.body.collection.head.isInstanceOf[SingleStatement])
+    assert(nestedForStmt.body.collection.
+      head.asInstanceOf[SingleStatement].getText == "SELECT 3")
   }
 
   // Helper methods
