@@ -18,6 +18,8 @@
 package org.apache.spark.sql.scripting
 
 import java.util
+import java.util.{Locale, UUID}
+
 import org.apache.spark.SparkException
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.Row
@@ -30,7 +32,6 @@ import org.apache.spark.sql.classic.{DataFrame, Dataset, SparkSession}
 import org.apache.spark.sql.errors.SqlScriptingErrors
 import org.apache.spark.sql.types.BooleanType
 
-import java.util.{Locale, UUID}
 
 /**
  * Trait for all SQL scripting execution nodes used during interpretation phase.
@@ -786,7 +787,7 @@ class LoopStatementExec(
  * Executable node for ForStatement.
  * @param query Executable node for the query.
  * @param variableName Name of variable used for accessing current row during iteration.
- * @param body Executable node for the body.
+ * @param statements List of statements to be executed in the FOR body.
  * @param label Label set to ForStatement by user or None otherwise.
  * @param session Spark session that SQL script is executed within.
  * @param context SqlScriptingExecutionContext keeps the execution state of current script.
@@ -794,7 +795,7 @@ class LoopStatementExec(
 class ForStatementExec(
     query: SingleStatementExec,
     variableName: Option[String],
-    body: CompoundBodyExec,
+    statements: Seq[CompoundStatementExec],
     val label: Option[String],
     session: SparkSession,
     context: SqlScriptingExecutionContext) extends NonLeafStatementExec {
@@ -803,10 +804,6 @@ class ForStatementExec(
     val VariableAssignment, Body = Value
   }
   private var state = ForState.VariableAssignment
-
-  // map of all variables created internally by the for statement
-  // (variableName -> variableExpression)
-  private var variablesMap: Map[String, Expression] = Map()
 
   private var queryResult: util.Iterator[Row] = _
   private var isResultCacheValid = false
@@ -838,34 +835,24 @@ class ForStatementExec(
       override def next(): CompoundStatementExec = state match {
 
         case ForState.VariableAssignment =>
-          variablesMap = createVariablesMapFromRow(cachedQueryResult().next())
+          val row = cachedQueryResult().next()
 
-          val variableDeclarations = variablesMap.keys.toSeq
-            .flatMap(colName => Seq(
-              createDeclareVarExec(colName, variablesMap(colName)),
-              createSetVarExec(colName, variablesMap(colName))
-            ))
+          val variableInitStatements = row.schema.names.toSeq
+            .map { colName => (colName, createExpressionFromValue(row.getAs(colName))) }
+            .flatMap { case (colName, expr) => Seq(
+              createDeclareVarExec(colName, expr),
+              createSetVarExec(colName, expr)
+            ) }
 
           bodyWithVariables = new CompoundBodyExec(
-            statements = variableDeclarations ++ body.statements :+ new NoOpStatementExec,
+            // NoOpStatementExec appended to end of body to prevent
+            // dropping variables before last statement is executed.
+            statements = variableInitStatements ++ statements :+ new NoOpStatementExec,
             label = variableName.orElse(Some(UUID.randomUUID().toString.toLowerCase(Locale.ROOT))),
             isScope = true,
             context = context,
             triggerToExceptionHandlerMap = TriggerToExceptionHandlerMap.empty
           )
-
-//          if (!areVariablesDeclared) {
-//            // create and execute declare var statements
-//            variablesMap.keys.toSeq
-//              .map(colName => createDeclareVarExec(colName, variablesMap(colName)))
-//              .foreach(declareVarExec => declareVarExec.buildDataFrame(session).collect())
-//            areVariablesDeclared = true
-//          }
-//
-//          // create and execute set var statements
-//          variablesMap.keys.toSeq
-//            .map(colName => createSetVarExec(colName, variablesMap(colName)))
-//            .foreach(setVarExec => setVarExec.buildDataFrame(session).collect())
 
           state = ForState.Body
           bodyWithVariables.reset()
@@ -940,21 +927,6 @@ class ForStatementExec(
     case _ => Literal(value)
   }
 
-  private def createVariablesMapFromRow(row: Row): Map[String, Expression] = {
-    val variablesMap = row.schema.names.toSeq.map { colName =>
-      colName -> createExpressionFromValue(row.getAs(colName))
-    }.toMap
-
-//    if (variableName.isDefined) {
-//      val namedStructArgs = variablesMap.keys.toSeq.flatMap { colName =>
-//        Seq(Literal(colName), variablesMap(colName))
-//      }
-//      val forVariable = CreateNamedStruct(namedStructArgs)
-//      variablesMap = variablesMap + (variableName.get -> forVariable)
-//    }
-    variablesMap
-  }
-
   private def createDeclareVarExec(varName: String, variable: Expression): SingleStatementExec = {
     val defaultExpression = DefaultValueExpression(Literal(null, variable.dataType), "null")
     val declareVariable = CreateVariable(
@@ -985,11 +957,8 @@ class ForStatementExec(
   override def reset(): Unit = {
     state = ForState.VariableAssignment
     isResultCacheValid = false
-    variablesMap = Map()
     interrupted = false
-    if (bodyWithVariables != null) {
-      bodyWithVariables.reset()
-    }
+    bodyWithVariables = null
   }
 }
 
