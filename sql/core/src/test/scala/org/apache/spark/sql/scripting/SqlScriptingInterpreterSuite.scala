@@ -2453,7 +2453,7 @@ class SqlScriptingInterpreterSuite extends QueryTest with SharedSparkSession {
         Seq.empty[Row], // set doubleCol
         Seq(Row(1)), // select intCol
         Seq(Row("first")), // select stringCol
-        Seq(Row(1.0)), // select doubleCol
+        Seq(Row(1.0)) // select doubleCol
       )
       verifySqlScriptResult(sqlScript, expected)
     }
@@ -2872,7 +2872,7 @@ class SqlScriptingInterpreterSuite extends QueryTest with SharedSparkSession {
         Seq.empty[Row], // declare intCol2
         Seq.empty[Row], // set intCol2
         Seq(Row(1)), // select intCol
-        Seq(Row(2)), // select intCol2
+        Seq(Row(2)) // select intCol2
       )
       verifySqlScriptResult(sqlScript, expected)
     }

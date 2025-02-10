@@ -1110,7 +1110,7 @@ class SqlScriptingExecutionNodeSuite extends SparkFunSuite with SharedSparkSessi
       "CreateVariable",
       "SetVariable",
       "statement1",
-      "lbl1",
+      "lbl1"
     ))
   }
 
@@ -1171,7 +1171,7 @@ class SqlScriptingExecutionNodeSuite extends SparkFunSuite with SharedSparkSessi
       "CreateVariable",
       "SetVariable",
       "body1",
-      "lbl1",
+      "lbl1"
     ))
   }
 
