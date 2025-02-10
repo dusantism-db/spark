@@ -823,11 +823,16 @@ class ForStatementExec(
    */
   private var interrupted: Boolean = false
 
+  /**
+   * Whether this iteration of the FOR loop is the first one.
+   */
+  private var firstIteration: Boolean = true
+
   private lazy val treeIterator: Iterator[CompoundStatementExec] =
     new Iterator[CompoundStatementExec] {
 
       override def hasNext: Boolean = !interrupted && (state match {
-          case ForState.VariableAssignment => cachedQueryResult().hasNext
+          case ForState.VariableAssignment => cachedQueryResult().hasNext || firstIteration
           case ForState.Body => bodyWithVariables.getTreeIterator.hasNext
         })
 
@@ -835,6 +840,17 @@ class ForStatementExec(
       override def next(): CompoundStatementExec = state match {
 
         case ForState.VariableAssignment =>
+          // If result set is empty and we are on the first iteration, we return NO-OP statement
+          // to prevent compound statements from not having anything to return. For example,
+          // if a FOR statement is nested in REPEAT, REPEAT will assume that FOR has at least
+          // one statement to return. In the case the result set is empty, FOR doesn't have
+          // anything to return naturally, so we return NO-OP instead.
+          if (!cachedQueryResult().hasNext && firstIteration) {
+            firstIteration = false
+            return new NoOpStatementExec
+          }
+          firstIteration = false
+
           val row = cachedQueryResult().next()
 
           val variableInitStatements = row.schema.names.toSeq
@@ -958,6 +974,7 @@ class ForStatementExec(
     state = ForState.VariableAssignment
     isResultCacheValid = false
     interrupted = false
+    firstIteration = true
     bodyWithVariables = null
   }
 }

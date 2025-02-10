@@ -2271,8 +2271,7 @@ class SqlScriptingInterpreterSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  // ignored until loops are fixed to support empty bodies
-  ignore("for statement - nested - empty result set") {
+  test("for statement - nested - empty result set") {
     withTable("t") {
       val sqlScript =
         """
@@ -2288,20 +2287,7 @@ class SqlScriptingInterpreterSuite extends QueryTest with SharedSparkSession {
           |""".stripMargin
 
       val expected = Seq(
-        Seq.empty[Row], // declare cnt
-        Seq.empty[Row], // create table
-        Seq.empty[Row], // insert
-        Seq.empty[Row], // set cnt
-        Seq(Row(0)), // select intCol
-        Seq.empty[Row], // insert
-        Seq.empty[Row], // drop local var
-        Seq.empty[Row], // drop local var
-        Seq.empty[Row], // set cnt
-        Seq(Row(0)), // select intCol
-        Seq(Row(1)), // select intCol
-        Seq.empty[Row], // insert
-        Seq.empty[Row], // drop local var
-        Seq.empty[Row] // drop local var
+        Seq.empty[Row] // create table
       )
       verifySqlScriptResult(sqlScript, expected)
     }
@@ -2878,8 +2864,7 @@ class SqlScriptingInterpreterSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  // ignored until loops are fixed to support empty bodies
-  ignore("for statement - no variable - nested - empty result set") {
+  test("for statement - no variable - nested - empty result set") {
     withTable("t") {
       val sqlScript =
         """
@@ -2895,18 +2880,7 @@ class SqlScriptingInterpreterSuite extends QueryTest with SharedSparkSession {
           |""".stripMargin
 
       val expected = Seq(
-        Seq.empty[Row], // declare cnt
-        Seq.empty[Row], // create table
-        Seq.empty[Row], // insert
-        Seq.empty[Row], // set cnt
-        Seq(Row(0)), // select intCol
-        Seq.empty[Row], // insert
-        Seq.empty[Row], // drop local var
-        Seq.empty[Row], // set cnt
-        Seq(Row(0)), // select intCol
-        Seq(Row(1)), // select intCol
-        Seq.empty[Row], // insert
-        Seq.empty[Row] // drop local var
+        Seq.empty[Row] // create table
       )
       verifySqlScriptResult(sqlScript, expected)
     }
