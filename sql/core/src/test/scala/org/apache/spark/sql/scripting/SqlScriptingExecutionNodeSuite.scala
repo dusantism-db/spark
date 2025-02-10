@@ -34,7 +34,7 @@ import org.apache.spark.sql.types.{IntegerType, StructField, StructType}
 class SqlScriptingExecutionNodeSuite extends SparkFunSuite with SharedSparkSession {
   // Helpers
   case class TestCompoundBody(
-      statements: Seq[CompoundStatementExec],
+      override val statements: Seq[CompoundStatementExec],
       label: Option[String] = None,
       isScope: Boolean = false,
       context: SqlScriptingExecutionContext = null,

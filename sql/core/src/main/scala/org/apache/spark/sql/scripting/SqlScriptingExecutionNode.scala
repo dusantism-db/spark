@@ -18,18 +18,19 @@
 package org.apache.spark.sql.scripting
 
 import java.util
-
 import org.apache.spark.SparkException
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.analysis.{NameParameterizedQuery, UnresolvedAttribute, UnresolvedIdentifier}
 import org.apache.spark.sql.catalyst.expressions.{Alias, CreateArray, CreateMap, CreateNamedStruct, Expression, Literal}
-import org.apache.spark.sql.catalyst.plans.logical.{CreateVariable, DefaultValueExpression, DropVariable, LogicalPlan, OneRowRelation, Project, SetVariable}
+import org.apache.spark.sql.catalyst.plans.logical.{CreateVariable, DefaultValueExpression, LogicalPlan, OneRowRelation, Project, SetVariable}
 import org.apache.spark.sql.catalyst.plans.logical.ExceptionHandlerType.ExceptionHandlerType
 import org.apache.spark.sql.catalyst.trees.{Origin, WithOrigin}
 import org.apache.spark.sql.classic.{DataFrame, Dataset, SparkSession}
 import org.apache.spark.sql.errors.SqlScriptingErrors
 import org.apache.spark.sql.types.BooleanType
+
+import java.util.{Locale, UUID}
 
 /**
  * Trait for all SQL scripting execution nodes used during interpretation phase.
@@ -206,6 +207,15 @@ class TriggerToExceptionHandlerMap(
   def getNotFoundHandler: Option[ExceptionHandlerExec] = notFoundHandler
 }
 
+object TriggerToExceptionHandlerMap {
+  def empty: TriggerToExceptionHandlerMap = new TriggerToExceptionHandlerMap(
+    Map.empty[String, ExceptionHandlerExec],
+    Map.empty[String, ExceptionHandlerExec],
+    None,
+    None
+  )
+}
+
 /**
  * Executable node for CompoundBody.
  * @param statements
@@ -221,7 +231,7 @@ class TriggerToExceptionHandlerMap(
  *   Map of condition names/sqlstates to error handlers defined in this compound body.
  */
 class CompoundBodyExec(
-    statements: Seq[CompoundStatementExec],
+    val statements: Seq[CompoundStatementExec],
     label: Option[String] = None,
     isScope: Boolean,
     context: SqlScriptingExecutionContext,
@@ -790,17 +800,13 @@ class ForStatementExec(
     context: SqlScriptingExecutionContext) extends NonLeafStatementExec {
 
   private object ForState extends Enumeration {
-    val VariableAssignment, Body, VariableCleanup = Value
+    val VariableAssignment, Body = Value
   }
   private var state = ForState.VariableAssignment
-  private var areVariablesDeclared = false
 
   // map of all variables created internally by the for statement
   // (variableName -> variableExpression)
   private var variablesMap: Map[String, Expression] = Map()
-
-  // compound body used for dropping variables while in ForState.VariableAssignment
-  private var dropVariablesExec: CompoundBodyExec = null
 
   private var queryResult: util.Iterator[Row] = _
   private var isResultCacheValid = false
@@ -813,6 +819,8 @@ class ForStatementExec(
     queryResult
   }
 
+  private var bodyWithVariables: CompoundBodyExec = null
+
   /**
    * For can be interrupted by LeaveStatementExec
    */
@@ -823,8 +831,7 @@ class ForStatementExec(
 
       override def hasNext: Boolean = !interrupted && (state match {
           case ForState.VariableAssignment => cachedQueryResult().hasNext
-          case ForState.Body => true
-          case ForState.VariableCleanup => dropVariablesExec.getTreeIterator.hasNext
+          case ForState.Body => bodyWithVariables.getTreeIterator.hasNext
         })
 
       @scala.annotation.tailrec
@@ -833,25 +840,40 @@ class ForStatementExec(
         case ForState.VariableAssignment =>
           variablesMap = createVariablesMapFromRow(cachedQueryResult().next())
 
-          if (!areVariablesDeclared) {
-            // create and execute declare var statements
-            variablesMap.keys.toSeq
-              .map(colName => createDeclareVarExec(colName, variablesMap(colName)))
-              .foreach(declareVarExec => declareVarExec.buildDataFrame(session).collect())
-            areVariablesDeclared = true
-          }
+          val variableDeclarations = variablesMap.keys.toSeq
+            .flatMap(colName => Seq(
+              createDeclareVarExec(colName, variablesMap(colName)),
+              createSetVarExec(colName, variablesMap(colName))
+            ))
 
-          // create and execute set var statements
-          variablesMap.keys.toSeq
-            .map(colName => createSetVarExec(colName, variablesMap(colName)))
-            .foreach(setVarExec => setVarExec.buildDataFrame(session).collect())
+          bodyWithVariables = new CompoundBodyExec(
+            statements = variableDeclarations ++ body.statements :+ new NoOpStatementExec,
+            label = variableName.orElse(Some(UUID.randomUUID().toString.toLowerCase(Locale.ROOT))),
+            isScope = true,
+            context = context,
+            triggerToExceptionHandlerMap = TriggerToExceptionHandlerMap.empty
+          )
+
+//          if (!areVariablesDeclared) {
+//            // create and execute declare var statements
+//            variablesMap.keys.toSeq
+//              .map(colName => createDeclareVarExec(colName, variablesMap(colName)))
+//              .foreach(declareVarExec => declareVarExec.buildDataFrame(session).collect())
+//            areVariablesDeclared = true
+//          }
+//
+//          // create and execute set var statements
+//          variablesMap.keys.toSeq
+//            .map(colName => createSetVarExec(colName, variablesMap(colName)))
+//            .foreach(setVarExec => setVarExec.buildDataFrame(session).collect())
 
           state = ForState.Body
-          body.reset()
+          bodyWithVariables.reset()
+          bodyWithVariables.enterScope()
           next()
 
         case ForState.Body =>
-          val retStmt = body.getTreeIterator.next()
+          val retStmt = bodyWithVariables.getTreeIterator.next()
 
           // Handle LEAVE or ITERATE statement if it has been encountered.
           retStmt match {
@@ -864,7 +886,7 @@ class ForStatementExec(
               // again, or it will be reset before being executed.
               // In either case, variables will not
               // be dropped normally, from ForState.VariableCleanup, so we drop them here.
-              dropVars()
+              bodyWithVariables.exitScope()
               return retStmt
             case iterStatementExec: IterateStatementExec if !iterStatementExec.hasBeenMatched =>
               if (label.contains(iterStatementExec.label)) {
@@ -874,20 +896,18 @@ class ForStatementExec(
                 // executed again, or it will be reset before being executed.
                 // In either case, variables will not
                 // be dropped normally, from ForState.VariableCleanup, so we drop them here.
-                dropVars()
+                bodyWithVariables.exitScope()
               }
-              switchStateFromBody()
+              state = ForState.VariableAssignment
               return retStmt
             case _ =>
           }
 
-          if (!body.getTreeIterator.hasNext) {
-            switchStateFromBody()
+          if (!bodyWithVariables.getTreeIterator.hasNext) {
+            bodyWithVariables.exitScope()
+            state = ForState.VariableAssignment
           }
           retStmt
-
-        case ForState.VariableCleanup =>
-          dropVariablesExec.getTreeIterator.next()
       }
     }
 
@@ -921,43 +941,18 @@ class ForStatementExec(
   }
 
   private def createVariablesMapFromRow(row: Row): Map[String, Expression] = {
-    var variablesMap = row.schema.names.toSeq.map { colName =>
+    val variablesMap = row.schema.names.toSeq.map { colName =>
       colName -> createExpressionFromValue(row.getAs(colName))
     }.toMap
 
-    if (variableName.isDefined) {
-      val namedStructArgs = variablesMap.keys.toSeq.flatMap { colName =>
-        Seq(Literal(colName), variablesMap(colName))
-      }
-      val forVariable = CreateNamedStruct(namedStructArgs)
-      variablesMap = variablesMap + (variableName.get -> forVariable)
-    }
+//    if (variableName.isDefined) {
+//      val namedStructArgs = variablesMap.keys.toSeq.flatMap { colName =>
+//        Seq(Literal(colName), variablesMap(colName))
+//      }
+//      val forVariable = CreateNamedStruct(namedStructArgs)
+//      variablesMap = variablesMap + (variableName.get -> forVariable)
+//    }
     variablesMap
-  }
-
-  /**
-   * Create and immediately execute dropVariable exec nodes for all variables in variablesMap.
-   */
-  private def dropVars(): Unit = {
-    variablesMap.keys.toSeq
-      .map(colName => createDropVarExec(colName))
-      .foreach(dropVarExec => dropVarExec.buildDataFrame(session).collect())
-    areVariablesDeclared = false
-  }
-
-  private def switchStateFromBody(): Unit = {
-    state = if (cachedQueryResult().hasNext) ForState.VariableAssignment
-    else {
-      // create compound body for dropping nodes after execution is complete
-      dropVariablesExec = new CompoundBodyExec(
-        variablesMap.keys.toSeq.map(colName => createDropVarExec(colName)),
-        None,
-        isScope = false,
-        context,
-        new TriggerToExceptionHandlerMap(Map.empty, Map.empty, None, None)
-      )
-      ForState.VariableCleanup
-    }
   }
 
   private def createDeclareVarExec(varName: String, variable: Expression): SingleStatementExec = {
@@ -985,21 +980,16 @@ class ForStatementExec(
       context)
   }
 
-  private def createDropVarExec(varName: String): SingleStatementExec = {
-    val dropVar = DropVariable(UnresolvedIdentifier(Seq(varName)), ifExists = true)
-    new SingleStatementExec(dropVar, Origin(), Map.empty, isInternal = true, context)
-  }
-
   override def getTreeIterator: Iterator[CompoundStatementExec] = treeIterator
 
   override def reset(): Unit = {
     state = ForState.VariableAssignment
     isResultCacheValid = false
     variablesMap = Map()
-    areVariablesDeclared = false
-    dropVariablesExec = null
     interrupted = false
-    body.reset()
+    if (bodyWithVariables != null) {
+      bodyWithVariables.reset()
+    }
   }
 }
 
