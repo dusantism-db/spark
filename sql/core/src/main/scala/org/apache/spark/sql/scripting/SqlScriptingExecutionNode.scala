@@ -18,12 +18,11 @@
 package org.apache.spark.sql.scripting
 
 import java.util
-
 import org.apache.spark.SparkException
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.analysis.{NameParameterizedQuery, UnresolvedAttribute, UnresolvedIdentifier}
-import org.apache.spark.sql.catalyst.expressions.{Alias, CreateArray, CreateMap, CreateNamedStruct, Expression, Literal}
+import org.apache.spark.sql.catalyst.expressions.{Alias, CreateArray, CreateMap, CreateNamedStruct, EqualTo, Expression, Literal}
 import org.apache.spark.sql.catalyst.plans.logical.{CreateVariable, DefaultValueExpression, DropVariable, LogicalPlan, OneRowRelation, Project, SetVariable}
 import org.apache.spark.sql.catalyst.plans.logical.ExceptionHandlerType.ExceptionHandlerType
 import org.apache.spark.sql.catalyst.trees.{Origin, WithOrigin}
@@ -594,6 +593,97 @@ class CaseStatementExec(
     curr = Some(conditions.head)
     clauseIdx = 0
     conditions.foreach(c => c.reset())
+    conditionalBodies.foreach(b => b.reset())
+    elseBody.foreach(b => b.reset())
+  }
+}
+
+class SimpleCaseStatementExec(
+    caseVariableExpr: Expression,
+    conditionExpressions: Seq[Expression],
+    conditionalBodies: Seq[CompoundBodyExec],
+    elseBody: Option[CompoundBodyExec],
+    session: SparkSession,
+    context: SqlScriptingExecutionContext) extends NonLeafStatementExec {
+  private object CaseState extends Enumeration {
+    val Condition, Body = Value
+  }
+
+  private var state = CaseState.Condition
+  var bodyExec: Option[CompoundBodyExec] = None
+
+  var conditionBodyTupleIterator: Iterator[(SingleStatementExec, CompoundBodyExec)] = _
+  private var caseVariable: Literal = _
+
+  private var isCacheValid = false
+  private def validateCache(): Unit = {
+    if (!isCacheValid) {
+      caseVariable = Literal(caseVariableExpr.eval(), caseVariableExpr.dataType)
+      conditionBodyTupleIterator = createConditionBodyIterator
+      isCacheValid = true
+    }
+  }
+
+  private def cachedCaseVariable: Literal = {
+    validateCache()
+    caseVariable
+  }
+
+  private def cachedConditionBodyIterator: Iterator[(SingleStatementExec, CompoundBodyExec)] = {
+    validateCache()
+    conditionBodyTupleIterator
+  }
+
+  private lazy val treeIterator: Iterator[CompoundStatementExec] =
+    new Iterator[CompoundStatementExec] {
+      override def hasNext: Boolean = state match {
+        case CaseState.Condition => cachedConditionBodyIterator.hasNext || elseBody.isDefined
+        case CaseState.Body => bodyExec.exists(_.getTreeIterator.hasNext)
+      }
+
+      override def next(): CompoundStatementExec = state match {
+        case CaseState.Condition =>
+          cachedConditionBodyIterator.nextOption()
+              .map { case (condStmt, body) =>
+                if (evaluateBooleanCondition(session, condStmt)) {
+                  bodyExec = Some(body)
+                  state = CaseState.Body
+                }
+                condStmt
+              }
+              .orElse(elseBody.map { body => {
+                bodyExec = Some(body)
+                state = CaseState.Body
+                next()
+              }})
+              .get
+        case CaseState.Body => bodyExec.get.getTreeIterator.next()
+      }
+    }
+
+  private def createConditionBodyIterator: Iterator[(SingleStatementExec, CompoundBodyExec)] =
+    conditionExpressions.zip(conditionalBodies)
+      .iterator
+      .map { case (expr, body) =>
+        val condition = Project(
+          Seq(Alias(EqualTo(cachedCaseVariable, expr), "condition")()),
+          OneRowRelation()
+        )
+        val condStmt = new SingleStatementExec(
+          condition,
+          Origin(),
+          Map.empty,
+          isInternal = true,
+          context = context
+        )
+        (condStmt, body)
+      }
+
+  override def getTreeIterator: Iterator[CompoundStatementExec] = treeIterator
+
+  override def reset(): Unit = {
+    state = CaseState.Condition
+    isCacheValid = false
     conditionalBodies.foreach(b => b.reset())
     elseBody.foreach(b => b.reset())
   }
