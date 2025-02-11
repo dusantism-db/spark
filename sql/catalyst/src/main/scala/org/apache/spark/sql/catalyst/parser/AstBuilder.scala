@@ -475,30 +475,36 @@ class AstBuilder extends DataTypeAstBuilder
 
   private def visitSimpleCaseStatementImpl(
       ctx: SimpleCaseStatementContext,
-      labelCtx: SqlScriptingLabelContext): CaseStatement = {
+      labelCtx: SqlScriptingLabelContext): SimpleCaseStatement = {
     // uses EqualTo to compare the case variable(the main case expression)
     // to the WHEN clause expressions
-    val conditions = ctx.conditionExpressions.asScala.toList.map(expr => withOrigin(expr) {
-      SingleStatement(
-        Project(
-          Seq(Alias(EqualTo(expression(ctx.caseVariable), expression(expr)), "condition")()),
-          OneRowRelation()))
-    })
+//    val caseVariable = expression(ctx.caseVariable)
+    val caseVariable = withOrigin(ctx.caseVariable) {
+      val caseExpr = expression(ctx.caseVariable)
+      SingleStatement(Project(Seq(Alias(caseExpr, "caseVariable")()), OneRowRelation()))
+    }
+
+    val conditionExpressions =
+      ctx.conditionExpressions.asScala.toList
+      .map(exprCtx => withOrigin(exprCtx) {
+        expression(exprCtx)
+      })
     val conditionalBodies =
       ctx.conditionalBodies.asScala.toList.map(
         body =>
           visitCompoundBodyImpl(body, None, allowVarDeclare = false, labelCtx, isScope = false)
       )
 
-    if (conditions.length != conditionalBodies.length) {
+    if (conditionExpressions.length != conditionalBodies.length) {
       throw SparkException.internalError(
-        s"Mismatched number of conditions ${conditions.length} and condition bodies" +
+        s"Mismatched number of conditions ${conditionExpressions.length} and condition bodies" +
           s" ${conditionalBodies.length} in case statement")
     }
 
-    CaseStatement(
-      conditions = conditions,
-      conditionalBodies = conditionalBodies,
+    SimpleCaseStatement(
+      caseVariable,
+      conditionExpressions,
+      conditionalBodies,
       elseBody = Option(ctx.elseBody).map(
         body =>
           visitCompoundBodyImpl(body, None, allowVarDeclare = false, labelCtx, isScope = false)

@@ -18,6 +18,7 @@
 package org.apache.spark.sql.scripting
 
 import java.util
+
 import org.apache.spark.SparkException
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.Row
@@ -599,7 +600,7 @@ class CaseStatementExec(
 }
 
 class SimpleCaseStatementExec(
-    caseVariableExpr: Expression,
+    caseVariableExec: SingleStatementExec,
     conditionExpressions: Seq[Expression],
     conditionalBodies: Seq[CompoundBodyExec],
     elseBody: Option[CompoundBodyExec],
@@ -613,20 +614,24 @@ class SimpleCaseStatementExec(
   var bodyExec: Option[CompoundBodyExec] = None
 
   var conditionBodyTupleIterator: Iterator[(SingleStatementExec, CompoundBodyExec)] = _
-  private var caseVariable: Literal = _
+  private var caseVariableLiteral: Literal = _
 
   private var isCacheValid = false
   private def validateCache(): Unit = {
     if (!isCacheValid) {
-      caseVariable = Literal(caseVariableExpr.eval(), caseVariableExpr.dataType)
+      caseVariableExec.isExecuted = true
+      val values = caseVariableExec.buildDataFrame(session).collect()
+      // TODO CASE_IMPROVEMENT: if values.length != 1 throw error
+
+      caseVariableLiteral = Literal(values.head.get(0))
       conditionBodyTupleIterator = createConditionBodyIterator
       isCacheValid = true
     }
   }
 
-  private def cachedCaseVariable: Literal = {
+  private def cachedCaseVariableLiteral: Literal = {
     validateCache()
-    caseVariable
+    caseVariableLiteral
   }
 
   private def cachedConditionBodyIterator: Iterator[(SingleStatementExec, CompoundBodyExec)] = {
@@ -666,12 +671,15 @@ class SimpleCaseStatementExec(
       .iterator
       .map { case (expr, body) =>
         val condition = Project(
-          Seq(Alias(EqualTo(cachedCaseVariable, expr), "condition")()),
+          Seq(Alias(EqualTo(cachedCaseVariableLiteral, expr), "condition")()),
           OneRowRelation()
         )
+        val conditionText = condition.projectList.head.asInstanceOf[Alias].child.toString
         val condStmt = new SingleStatementExec(
           condition,
-          Origin(),
+          Origin(sqlText = Some(conditionText),
+            startIndex = Some(0),
+            stopIndex = Some(conditionText.length - 1)),
           Map.empty,
           isInternal = true,
           context = context

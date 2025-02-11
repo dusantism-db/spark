@@ -21,7 +21,7 @@ import scala.collection.mutable.HashMap
 
 import org.apache.spark.SparkException
 import org.apache.spark.sql.catalyst.expressions.Expression
-import org.apache.spark.sql.catalyst.plans.logical.{CaseStatement, CompoundBody, CompoundPlanStatement, ExceptionHandlerType, ForStatement, IfElseStatement, IterateStatement, LeaveStatement, LoopStatement, RepeatStatement, SingleStatement, WhileStatement}
+import org.apache.spark.sql.catalyst.plans.logical.{CaseStatement, CompoundBody, CompoundPlanStatement, ExceptionHandlerType, ForStatement, IfElseStatement, IterateStatement, LeaveStatement, LoopStatement, RepeatStatement, SimpleCaseStatement, SingleStatement, WhileStatement}
 import org.apache.spark.sql.catalyst.trees.CurrentOrigin
 import org.apache.spark.sql.classic.SparkSession
 import org.apache.spark.sql.errors.SqlScriptingErrors
@@ -201,6 +201,20 @@ case class SqlScriptingInterpreter(session: SparkSession) {
           transformTreeIntoExecutable(body, args, context).asInstanceOf[CompoundBodyExec])
         new CaseStatementExec(
           conditionsExec, conditionalBodiesExec, unconditionalBodiesExec, session)
+
+      case SimpleCaseStatement(caseValueStmt, conditionExpressions, conditionalBodies, elseBody) =>
+        val caseVarExec = new SingleStatementExec(
+          caseValueStmt.parsedPlan,
+          caseValueStmt.origin,
+          args,
+          isInternal = true,
+          context)
+        val conditionalBodiesExec = conditionalBodies.map(body =>
+          transformTreeIntoExecutable(body, args, context).asInstanceOf[CompoundBodyExec])
+        val elseBodyExec = elseBody.map(body =>
+          transformTreeIntoExecutable(body, args, context).asInstanceOf[CompoundBodyExec])
+        new SimpleCaseStatementExec(
+          caseVarExec, conditionExpressions, conditionalBodiesExec, elseBodyExec, session, context)
 
       case WhileStatement(condition, body, label) =>
         val conditionExec =

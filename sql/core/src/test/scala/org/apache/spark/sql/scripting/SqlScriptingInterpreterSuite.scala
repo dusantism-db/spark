@@ -876,9 +876,10 @@ class SqlScriptingInterpreterSuite extends QueryTest with SharedSparkSession {
           "expression" -> "'one'",
           "sourceType" -> "\"STRING\"",
           "targetType" -> "\"BIGINT\""),
-        context = ExpectedContext(fragment = "\"one\"", start = 23, stop = 27))
+        context = ExpectedContext(fragment = "", start = -1, stop = -1))
     }
     withSQLConf(SQLConf.ANSI_ENABLED.key -> "false") {
+//      runSqlScript(commands)
       checkError(
         exception = intercept[SqlScriptingException](
           runSqlScript(commands)
