@@ -445,7 +445,7 @@ class AstBuilder extends DataTypeAstBuilder
 
   private def visitSearchedCaseStatementImpl(
       ctx: SearchedCaseStatementContext,
-      labelCtx: SqlScriptingLabelContext): CaseStatement = {
+      labelCtx: SqlScriptingLabelContext): SearchedCaseStatement = {
     val conditions = ctx.conditions.asScala.toList.map(boolExpr => withOrigin(boolExpr) {
       SingleStatement(
         Project(
@@ -464,7 +464,7 @@ class AstBuilder extends DataTypeAstBuilder
           s" ${conditionalBodies.length} in case statement")
     }
 
-    CaseStatement(
+    SearchedCaseStatement(
       conditions = conditions,
       conditionalBodies = conditionalBodies,
       elseBody = Option(ctx.elseBody).map(
@@ -476,12 +476,8 @@ class AstBuilder extends DataTypeAstBuilder
   private def visitSimpleCaseStatementImpl(
       ctx: SimpleCaseStatementContext,
       labelCtx: SqlScriptingLabelContext): SimpleCaseStatement = {
-    // uses EqualTo to compare the case variable(the main case expression)
-    // to the WHEN clause expressions
-//    val caseVariable = expression(ctx.caseVariable)
-    val caseVariable = withOrigin(ctx.caseVariable) {
-      val caseExpr = expression(ctx.caseVariable)
-      SingleStatement(Project(Seq(Alias(caseExpr, "caseVariable")()), OneRowRelation()))
+    val caseVariableExpr = withOrigin(ctx.caseVariable) {
+      expression(ctx.caseVariable)
     }
 
     val conditionExpressions =
@@ -502,7 +498,7 @@ class AstBuilder extends DataTypeAstBuilder
     }
 
     SimpleCaseStatement(
-      caseVariable,
+      caseVariableExpr,
       conditionExpressions,
       conditionalBodies,
       elseBody = Option(ctx.elseBody).map(

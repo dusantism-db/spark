@@ -528,14 +528,14 @@ class WhileStatementExec(
 }
 
 /**
- * Executable node for CaseStatement.
+ * Executable node for SearchedCaseStatement.
  * @param conditions Collection of executable conditions which correspond to WHEN clauses.
  * @param conditionalBodies Collection of executable bodies that have a corresponding condition,
  *                 in WHEN branches.
  * @param elseBody Body that is executed if none of the conditions are met, i.e. ELSE branch.
  * @param session Spark session that SQL script is executed within.
  */
-class CaseStatementExec(
+class SearchedCaseStatementExec(
     conditions: Seq[SingleStatementExec],
     conditionalBodies: Seq[CompoundBodyExec],
     elseBody: Option[CompoundBodyExec],
@@ -621,7 +621,6 @@ class SimpleCaseStatementExec(
     if (!isCacheValid) {
       caseVariableExec.isExecuted = true
       val values = caseVariableExec.buildDataFrame(session).collect()
-      // TODO CASE_IMPROVEMENT: if values.length != 1 throw error
 
       caseVariableLiteral = Literal(values.head.get(0))
       conditionBodyTupleIterator = createConditionBodyIterator

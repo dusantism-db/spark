@@ -220,13 +220,13 @@ case class IterateStatement(label: String) extends CompoundPlanStatement {
 }
 
 /**
- * Logical operator for CASE statement.
+ * Logical operator for CASE statement, SEARCHED variant.
  * @param conditions Collection of conditions which correspond to WHEN clauses.
  * @param conditionalBodies Collection of bodies that have a corresponding condition,
  *                          in WHEN branches.
  * @param elseBody Body that is executed if none of the conditions are met, i.e. ELSE branch.
  */
-case class CaseStatement(
+case class SearchedCaseStatement(
     conditions: Seq[SingleStatement],
     conditionalBodies: Seq[CompoundBody],
     elseBody: Option[CompoundBody]) extends CompoundPlanStatement {
@@ -253,19 +253,20 @@ case class CaseStatement(
       conditionalBodies = conditionalBodies.dropRight(1)
       elseBody = Some(conditionalBodies.last)
     }
-    CaseStatement(conditions, conditionalBodies, elseBody)
+    SearchedCaseStatement(conditions, conditionalBodies, elseBody)
   }
 }
 
 /**
- * Logical operator for CASE statement.
- * @param conditions Collection of conditions which correspond to WHEN clauses.
+ * Logical operator for CASE statement, SIMPLE variant.
+ * @param caseVariableExpression Expression with which all conditionExpressions will be compared to.
+ * @param conditionExpressions Collection of expressions which correspond to WHEN clauses.
  * @param conditionalBodies Collection of bodies that have a corresponding condition,
  *                          in WHEN branches.
  * @param elseBody Body that is executed if none of the conditions are met, i.e. ELSE branch.
  */
 case class SimpleCaseStatement(
-    caseVariableExpression: SingleStatement,
+    caseVariableExpression: Expression,
     conditionExpressions: Seq[Expression],
     conditionalBodies: Seq[CompoundBody],
     elseBody: Option[CompoundBody]) extends CompoundPlanStatement {
@@ -275,6 +276,7 @@ case class SimpleCaseStatement(
 
   override def children: Seq[LogicalPlan] = conditionalBodies
 
+  // TODO CASE_IMPROVEMENT - fix this
   override protected def withNewChildrenInternal(
       newChildren: IndexedSeq[LogicalPlan]): LogicalPlan = {
     val conditionalBodies = newChildren.map(_.asInstanceOf[CompoundBody])
